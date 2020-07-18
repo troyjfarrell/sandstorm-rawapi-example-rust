@@ -107,10 +107,10 @@ impl web_session::Server for WebSession {
             Promise::ok(())
         } else if path == "" || path.ends_with("/") {
             // A directory. Serve "index.html".
-            self.read_file(&format!("client/{}index.html", path), results, "text/html; charset=UTF-8")
+            self.read_file(&format!("/opt/app/client/{}index.html", path), results, "text/html; charset=UTF-8")
         } else {
             // Request for a static file. Look for it under "client/".
-            let filename = format!("client/{}", path);
+            let filename = format!("/opt/app/client/{}", path);
 
             // Check if it's a directory.
             if let Ok(true) = ::std::fs::metadata(&filename).map(|md| md.is_dir()) {
