@@ -33,6 +33,21 @@ pub struct WebSession {
     can_write: bool,
 }
 
+fn get_cookie_with_key<'a>(
+    cookies: ::capnp::struct_list::Reader<'a, sandstorm::util_capnp::key_value::Owned>,
+    key: &'a str,
+    mut cookie_results: ::sandstorm::util_capnp::key_value::Reader<'a>) -> Promise<(), Error> {
+    for i in 0..cookies.len() {
+        let cookie = cookies.get(i);
+        let name = pry!(cookie.get_key());
+        if name == key {
+            cookie_results = cookie;
+            return Promise::ok(())
+        }
+    }
+    Promise::err(Error::failed(format!("No matching cookie with name '{}'", key)))
+}
+
 impl WebSession {
     pub fn new(user_info: user_info::Reader,
                _context: session_context::Client,
@@ -155,7 +170,24 @@ impl web_session::Server for WebSession {
             pry!(::std::fs::rename(temp_path, path));
             pry!(writer.sync_all());
 
-            results.get().init_no_content();
+            let context = pry!(params.get_context());
+            let cookies = pry!(context.get_cookies());
+            let mut response = results.get();
+
+            let mut cookie_results: ::sandstorm::util_capnp::key_value::Reader;
+            match get_cookie_with_key(cookies, "key", cookie_results) {
+                Ok(_) => println!("We have the key cookie."),
+                Err(_) => {
+                    println!("Setting the key cookie.");
+                    let set_cookies = response.reborrow().init_set_cookies(1);
+                    let mut cookie = set_cookies.get(0);
+                    cookie.set_name("key");
+                    cookie.set_value("0123456789abcdef");
+                    cookie.set_http_only(true);
+                }
+            };
+
+            response.reborrow().init_no_content();
         }
         Promise::ok(())
     }
