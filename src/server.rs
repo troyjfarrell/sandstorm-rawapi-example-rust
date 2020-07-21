@@ -33,6 +33,16 @@ pub struct WebSession {
     can_write: bool,
 }
 
+fn get_cookie<'a>(
+    cookies: capnp::struct_list::Reader<'a, sandstorm::util_capnp::key_value::Owned>,
+    cookie_name: &'a str,
+) -> Option<sandstorm::util_capnp::key_value::Reader<'a>> {
+    cookies
+        .iter()
+        .filter(|i| i.get_key().unwrap() == cookie_name)
+        .last()
+}
+
 impl WebSession {
     pub fn new(user_info: user_info::Reader,
                _context: session_context::Client,
@@ -133,43 +143,50 @@ impl web_session::Server for WebSession {
 	-> Promise<(), Error>
     {
         // HTTP PUT request.
+        let oparams = pry!(params.get());
+        let opath = pry!(oparams.get_path());
+        pry!(self.require_canonical_path(opath));
+        let can_write = self.can_write;
 
-        let params = pry!(params.get());
-        let path = pry!(params.get_path());
-        pry!(self.require_canonical_path(path));
+        Promise::from_future(async move {
+            let params = params.get()?;
+            let path = params.get_path()?;
 
-        if !path.starts_with("var/") {
-            return Promise::err(Error::failed("PUT only supported under /var.".to_string()));
-        }
+            if !path.starts_with("var/") {
+                return Err(Error::failed("PUT only supported under /var.".to_string()));
+            }
 
-        if !self.can_write {
-            results.get().init_client_error()
-                .set_status_code(web_session::response::ClientErrorCode::Forbidden);
-        } else {
-            use std::io::Write;
-            let temp_path = format!("{}.uploading", path);
-            let data = pry!(pry!(params.get_content()).get_content());
+            if !can_write {
+                results
+                    .get()
+                    .init_client_error()
+                    .set_status_code(web_session::response::ClientErrorCode::Forbidden);
+            } else {
+                use std::io::Write;
+                let temp_path = format!("{}.uploading", path);
+                let data = params.get_content()?.get_content()?;
 
-            let mut writer = pry!(::std::fs::File::create(&temp_path));
-            pry!(writer.write_all(data));
-            pry!(::std::fs::rename(temp_path, path));
-            pry!(writer.sync_all());
-
-        }
-        let context = pry!(params.get_context());
-        let mut response = results.get();
-        if !pry!(context.get_cookies()).iter()
-                                       .map(|c| c.get_key())
-                                       .fold(false, |i, j| i || match j  { Ok("key") => true, _ => false }) {
-            println!("Setting the key cookie");
-            let set_cookies = response.reborrow().init_set_cookies(1);
-            let mut cookie = set_cookies.get(0);
-            cookie.set_name("key");
-            cookie.set_value("0123456789abcdef");
-            cookie.set_http_only(true);
-        }
-        response.reborrow().init_no_content();
-        Promise::ok(())
+                let mut writer = ::std::fs::File::create(&temp_path)?;
+                writer.write_all(data)?;
+                ::std::fs::rename(temp_path, path)?;
+                writer.sync_all()?;
+            }
+            let context = params.get_context()?;
+            let cookies = context.get_cookies()?;
+            let mut response = results.get();
+            if get_cookie(cookies, "key").is_some() {
+                println!("The key cookie is set.");
+            } else {
+                println!("Setting the key cookie");
+                let set_cookies = response.reborrow().init_set_cookies(1);
+                let mut cookie = set_cookies.get(0);
+                cookie.set_name("key");
+                cookie.set_value("0123456789abcdef");
+                cookie.set_http_only(true);
+            }
+            response.reborrow().init_no_content();
+            Ok(())
+        })
     }
 
     fn delete(&mut self,
